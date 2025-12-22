@@ -31,9 +31,9 @@ module TPU(
 input clk;
 input rst_n;
 input            in_valid;
-input [7:0]      K;
-input [7:0]      M;
-input [7:0]      N;
+input [8:0]      K;
+input [8:0]      M;
+input [8:0]      N;
 input signed [8:0]      input_offset;
 output  reg      busy;
 
@@ -54,7 +54,7 @@ input  [127:0]   C_data_out;
 
 //* Implement your design here
 
-reg [7:0] K_reg, M_reg, N_reg;
+reg [8:0] K_reg, M_reg, N_reg;
 reg [15:0] index_r, index_c, C_shift_1, C_shift_2;
 reg [15:0] A_index_base, B_index_base, C_index_base;
 reg signed [31:0] A_buf [0:3];
@@ -76,14 +76,6 @@ localparam IDLE       = 4'd0,
            NEXT_LOOP  = 4'd9,
            RESET      = 4'd10;
 
-
-
-// typedef enum logic [3:0] {IDLE, // 0 
-//                           SA_CLEAR_1, SA_CLEAR_2, // 1, 2
-//                           READ_ID, READ_DATA, // 3, 4
-//                           SA_START, SA_WAIT_1, SA_WAIT_2, // 7, 8, 9
-//                           C_SAVE, // A
-//                           NEXT_LOOP, RESET} state_t; // B, C
 reg [3:0] s_cur, s_nxt;
 reg [1:0] s_cnt;
 

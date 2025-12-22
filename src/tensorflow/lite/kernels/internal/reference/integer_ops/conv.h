@@ -134,7 +134,6 @@ inline void ConvPerChannel(
   int32_t result_arr[PMax][KernelMax];
 
   // im2col
-  perf_enable_counter(0);
   for (int out_y = 0; out_y < output_height; ++out_y){
     for (int out_x = 0; out_x < output_width; ++out_x) {
       const int p = out_y * output_width + out_x;
@@ -155,10 +154,8 @@ inline void ConvPerChannel(
       }
     }
   }
-  // perf_disable_counter(0);
  
   // kernel
-  // perf_enable_counter(1);
   for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
     int k_idx = 0;
     for (int filter_y = 0; filter_y < filter_height; ++filter_y) {
@@ -171,7 +168,6 @@ inline void ConvPerChannel(
       }
     }
   }
-  // perf_disable_counter(1);
 
 
   // GEMM
@@ -192,103 +188,98 @@ inline void ConvPerChannel(
   // CFU GEMM (M * K @ K * N)
   const uint32_t M = P;
   const uint32_t N = output_depth;
-  constexpr uint32_t T = 64;
+  // constexpr uint32_t T = 64;
 
   for (uint32_t i = 0; i < M; ++i) {
     for (uint32_t j = 0; j < N; ++j)
       result_arr[i][j] = 0;
   }
 
-  for (uint32_t m0 = 0; m0 < M; m0 += T) {
-    const uint32_t M_tile = std::min(T, M - m0);
-    for (uint32_t n0 = 0; n0 < N; n0 += T) {
-      const uint32_t N_tile = std::min(T, N - n0);
-      for (uint32_t k0 = 0; k0 < K; k0 += T) {
-        const uint32_t K_tile = std::min(T, K - k0);
-        int A_row_cnt = 0;
+  // printf("(M, K, N) = (%ld, %ld, %ld)\n", M, K, N);
 
-        // perf_enable_counter(2);
-        for (uint32_t ii = 0; ii < M_tile; ii += 4) {
-          for (uint32_t jj = 0; jj < K_tile; ++jj) {
-            const uint32_t i = m0 + ii;
-            const uint32_t j = k0 + jj;
-  
-            const int8_t a0 = im2col[i + 0][j];
-            const int8_t a1 = (ii + 1 < M_tile) ? im2col[i + 1][j] : static_cast<int8_t>(-input_offset);
-            const int8_t a2 = (ii + 2 < M_tile) ? im2col[i + 2][j] : static_cast<int8_t>(-input_offset);
-            const int8_t a3 = (ii + 3 < M_tile) ? im2col[i + 3][j] : static_cast<int8_t>(-input_offset);
-  
-            const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(a0)) << 24);
-            const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(a1)) << 16);
-            const uint32_t data2 = (static_cast<uint32_t>(static_cast<uint8_t>(a2)) <<  8);
-            const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(a3)));
-  
-            const uint32_t data = data0 | data1 | data2 | data3;
-            cfu_op0(1, A_row_cnt, data);
-            ++A_row_cnt;
-          }
+  const uint32_t Tk = 256;
+  const uint32_t Tn = 128;
+
+  const uint32_t M_tile = M;
+  for (uint32_t n0 = 0; n0 < N; n0 += Tn) {
+    const uint32_t N_tile = std::min(Tn, N - n0);
+    for (uint32_t i = 0; i < 8192; ++i)
+      cfu_op0(5, i, 0);
+    for (uint32_t k0 = 0; k0 < K; k0 += Tk) {
+      const uint32_t K_tile = std::min(Tk, K - k0);
+      int A_row_cnt = 0;
+
+      for (uint32_t ii = 0; ii < M_tile; ii += 4) {
+        for (uint32_t jj = 0; jj < K_tile; ++jj) {
+          const uint32_t i = ii;
+          const uint32_t j = k0 + jj;
+
+          const int8_t a0 = im2col[i + 0][j];
+          const int8_t a1 = (ii + 1 < M_tile) ? im2col[i + 1][j] : static_cast<int8_t>(-input_offset);
+          const int8_t a2 = (ii + 2 < M_tile) ? im2col[i + 2][j] : static_cast<int8_t>(-input_offset);
+          const int8_t a3 = (ii + 3 < M_tile) ? im2col[i + 3][j] : static_cast<int8_t>(-input_offset);
+
+          const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(a0)) << 24);
+          const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(a1)) << 16);
+          const uint32_t data2 = (static_cast<uint32_t>(static_cast<uint8_t>(a2)) <<  8);
+          const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(a3)));
+
+          const uint32_t data = data0 | data1 | data2 | data3;
+          cfu_op0(1, A_row_cnt, data);
+          ++A_row_cnt;
         }
-        // perf_disable_counter(2);
-
-        // perf_enable_counter(3);
-        int B_row_cnt = 0;
-        for (uint32_t jj = 0; jj < N_tile; jj += 4) {
-          for (uint32_t ii = 0; ii < K_tile; ++ii) {
-            const uint32_t i = k0 + ii;
-            const uint32_t j = n0 + jj;
-
-            const int8_t b0 = kernel[i][j];
-            const int8_t b1 = (jj + 1 < N_tile) ? kernel[i][j + 1] : 0;
-            const int8_t b2 = (jj + 2 < N_tile) ? kernel[i][j + 2] : 0;
-            const int8_t b3 = (jj + 3 < N_tile) ? kernel[i][j + 3] : 0;
-
-            const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(b0)) << 24);
-            const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(b1)) << 16);
-            const uint32_t data2 = (static_cast<uint32_t>(static_cast<uint8_t>(b2)) <<  8);
-            const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(b3)));
-
-            const uint32_t data = data0 | data1 | data2 | data3;
-            cfu_op0(2, B_row_cnt, data);
-            ++B_row_cnt;
-          }
-        }
-        // perf_disable_counter(3);
-
-        // perf_enable_counter(4);
-        const uint32_t dim = (static_cast<uint32_t>(K_tile) << 16) |
-                             (static_cast<uint32_t>(M_tile) << 8)  |
-                             static_cast<uint32_t>(N_tile);
-        cfu_op0(3, dim, static_cast<uint32_t>(input_offset));
-        // perf_disable_counter(4);
-
       }
-      // perf_enable_counter(5);
-      uint32_t C_row_cnt = 0;
+
+      int B_row_cnt = 0;
       for (uint32_t jj = 0; jj < N_tile; jj += 4) {
-        for (uint32_t ii = 0; ii < M_tile; ++ii) {
-          const uint32_t i = m0 + ii;
+        for (uint32_t ii = 0; ii < K_tile; ++ii) {
+          const uint32_t i = k0 + ii;
           const uint32_t j = n0 + jj;
 
-          result_arr[i][j] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 0));
-          if (jj + 1 < N_tile) {
-            result_arr[i][j + 1] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 1));
-          }
-          if (jj + 2 < N_tile) {
-            result_arr[i][j + 2] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 2)); 
-          }
-          if (jj + 3 < N_tile) {
-            result_arr[i][j + 3] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 3));
-          }
-          ++C_row_cnt;
+          const int8_t b0 = kernel[i][j];
+          const int8_t b1 = (jj + 1 < N_tile) ? kernel[i][j + 1] : 0;
+          const int8_t b2 = (jj + 2 < N_tile) ? kernel[i][j + 2] : 0;
+          const int8_t b3 = (jj + 3 < N_tile) ? kernel[i][j + 3] : 0;
+
+          const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(b0)) << 24);
+          const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(b1)) << 16);
+          const uint32_t data2 = (static_cast<uint32_t>(static_cast<uint8_t>(b2)) <<  8);
+          const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(b3)));
+
+          const uint32_t data = data0 | data1 | data2 | data3;
+          cfu_op0(2, B_row_cnt, data);
+          ++B_row_cnt;
         }
       }
-      for (uint32_t i = 0; i < 1024; ++i)
-        cfu_op0(5, i, 0);
-      // perf_disable_counter(5);
+
+      const uint32_t dim = (static_cast<uint32_t>(K_tile) << 18) |
+                            (static_cast<uint32_t>(M_tile) << 9)  |
+                            static_cast<uint32_t>(N_tile);
+      cfu_op0(3, dim, static_cast<uint32_t>(input_offset));
+
     }
+    uint32_t C_row_cnt = 0;
+    for (uint32_t jj = 0; jj < N_tile; jj += 4) {
+      for (uint32_t ii = 0; ii < M_tile; ++ii) {
+        const uint32_t i = ii;
+        const uint32_t j = n0 + jj;
+
+        result_arr[i][j] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 0));
+        if (jj + 1 < N_tile) {
+          result_arr[i][j + 1] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 1));
+        }
+        if (jj + 2 < N_tile) {
+          result_arr[i][j + 2] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 2)); 
+        }
+        if (jj + 3 < N_tile) {
+          result_arr[i][j + 3] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 3));
+        }
+        ++C_row_cnt;
+      }
+    }
+
   }
 
-  // perf_enable_counter(6);
   if (bias_data){
     for (uint32_t i = 0; i < M; ++i) {
       for (uint32_t j = 0; j < N; ++j) {
@@ -303,27 +294,25 @@ inline void ConvPerChannel(
       const int p = out_y * output_width + out_x;
       for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
         int32_t acc = result_arr[p][out_channel];
-        // acc = MultiplyByQuantizedMultiplier(
-        //   acc, output_multiplier[out_channel], output_shift[out_channel]);
-        // acc += output_offset;
-        // acc = std::max(acc, output_activation_min);
-        // acc = std::min(acc, output_activation_max);
+        acc = MultiplyByQuantizedMultiplier(
+          acc, output_multiplier[out_channel], output_shift[out_channel]);
+        acc += output_offset;
+        acc = std::max(acc, output_activation_min);
+        acc = std::min(acc, output_activation_max);
         // int32_t my_acc = myRequant(acc, output_multiplier[out_channel],
         //               output_shift[out_channel], output_offset, 
         //               output_activation_min, output_activation_max);
         // if (acc != my_acc) {
         //   printf("(acc, my_acc) = (%ld, %ld) (multiplier, shift, offset) = (%ld, %ld, %ld)\n", acc, my_acc, output_multiplier[out_channel], output_shift[out_channel], output_offset);
         // }
-        // output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] = acc;
-        output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
-            myRequant(acc, output_multiplier[out_channel],
-                      output_shift[out_channel], output_offset, 
-                      output_activation_min, output_activation_max);
+        output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] = acc;
+        // output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
+        //     myRequant(acc, output_multiplier[out_channel],
+        //               output_shift[out_channel], output_offset, 
+        //               output_activation_min, output_activation_max);
       }
     }
   }
-  // perf_disable_counter(6);
-  perf_disable_counter(7);
 
 }
 

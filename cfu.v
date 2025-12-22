@@ -104,14 +104,14 @@ end
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        input_K_reg      <= 8'd0;
-        input_M_reg      <= 8'd0;
-        input_N_reg      <= 8'd0;
-        input_offset_reg <= 32'd0;
+        input_K_reg      <= 9'd0;
+        input_M_reg      <= 9'd0;
+        input_N_reg      <= 9'd0;
+        input_offset_reg <= 9'd0;
     end else if (cmd_fire && sel_run) begin
-        input_K_reg      <= cmd_payload_inputs_0[23:16];
-        input_M_reg      <= cmd_payload_inputs_0[15:8];
-        input_N_reg      <= cmd_payload_inputs_0[7:0];
+        input_K_reg      <= cmd_payload_inputs_0[26:18];
+        input_M_reg      <= cmd_payload_inputs_0[17:9];
+        input_N_reg      <= cmd_payload_inputs_0[8:0];
         input_offset_reg <= cmd_payload_inputs_1[8:0];
     end
 end
@@ -199,7 +199,7 @@ end
 // A Buffer
 //------------------------------------------------------------
 
-wire [11:0] A_addr;
+wire [13:0] A_addr;
 wire [31:0] A_din;
 wire [31:0] A_dout;
 wire        A_we;
@@ -207,7 +207,7 @@ wire        A_we;
 wire cpu_A_we = cmd_fire && sel_a;
 
 global_buffer_bram #(
-    .ADDR_BITS(12),
+    .ADDR_BITS(14),
     .DATA_BITS(32)
 ) buffer_A(
     .clk(clk),
@@ -220,14 +220,14 @@ global_buffer_bram #(
 );
 
 assign A_we   = cpu_A_we ? 1'b1 : tpu_A_we;
-assign A_addr = cpu_A_we ? cmd_payload_inputs_0[11:0] : tpu_A_addr;
+assign A_addr = cpu_A_we ? cmd_payload_inputs_0[13:0] : tpu_A_addr;
 assign A_din  = cpu_A_we ? cmd_payload_inputs_1 : tpu_A_din;
 
 //------------------------------------------------------------
 // B Buffer
 //------------------------------------------------------------
 
-wire [11:0] B_addr;
+wire [12:0] B_addr;
 wire [31:0] B_din;
 wire [31:0] B_dout;
 wire        B_we;
@@ -235,7 +235,7 @@ wire        B_we;
 wire cpu_B_we = cmd_fire && sel_b;
 
 global_buffer_bram #(
-    .ADDR_BITS(12),
+    .ADDR_BITS(13),
     .DATA_BITS(32)
 ) buffer_B(
     .clk(clk),
@@ -248,7 +248,7 @@ global_buffer_bram #(
 );
 
 assign B_we =   cpu_B_we ? 1'b1 : tpu_B_we;
-assign B_addr = cpu_B_we ? cmd_payload_inputs_0[11:0] : tpu_B_addr;
+assign B_addr = cpu_B_we ? cmd_payload_inputs_0[12:0] : tpu_B_addr;
 assign B_din =  cpu_B_we ? cmd_payload_inputs_1 : tpu_B_din;
 
 
@@ -256,13 +256,13 @@ assign B_din =  cpu_B_we ? cmd_payload_inputs_1 : tpu_B_din;
 // C Buffer
 //------------------------------------------------------------
 
-wire [11:0]  C_addr;
+wire [12:0]  C_addr;
 wire [1:0]   C_addr_2;
 wire [127:0] C_din;
 wire [127:0] C_dout;
 wire         C_we;
 
-reg [11:0] C_addr_reg;
+reg [12:0] C_addr_reg;
 reg [1:0]  C_addr_2_reg;
 
 reg [127:0] C_read_data_q;
@@ -272,7 +272,7 @@ wire [31:0] C_word = (C_addr_2_reg == 2'd0) ? C_dout[127:96] :
                      (C_addr_2_reg == 2'd2) ? C_dout[63:32]  :
                                               C_dout[31:0];
 
-localparam integer C_ADDR_BITS = 12;
+localparam integer C_ADDR_BITS = 13;
 
 wire C_acc_mode;
 
@@ -310,12 +310,12 @@ assign C_acc_mode = c_clear_one_q ? 1'b0 : (cpu_C_read_active ? 1'b0 : tpu_C_we)
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        C_addr_reg   <= 12'd0;
+        C_addr_reg   <= 13'd0;
         C_addr_2_reg <= 2'd0;
         C_read_data_q <= 128'd0;
     end else begin
         if (cmd_fire && sel_c && state_q == S_IDLE) begin
-            C_addr_reg   <= cmd_payload_inputs_0[11:0];
+            C_addr_reg   <= cmd_payload_inputs_0[12:0];
             C_addr_2_reg <= cmd_payload_inputs_1[1:0];
         end
 
@@ -355,7 +355,7 @@ always @(posedge clk or posedge reset) begin
     end else begin
         if (cmd_fire && sel_rst_c && (state_q == S_IDLE)) begin
             c_clear_one_q  <= 1'b1;
-            c_clear_addr_q <= cmd_payload_inputs_0[11:0];
+            c_clear_addr_q <= cmd_payload_inputs_0[12:0];
         end
         else if (state_q == S_RST_C) begin
             c_clear_one_q <= 1'b0;
@@ -378,9 +378,9 @@ always @(posedge clk or posedge reset) begin
 end
 wire tpu_in_valid = tpu_in_valid_q;
 
-reg [7:0] input_K_reg;
-reg [7:0] input_M_reg;
-reg [7:0] input_N_reg;
+reg [8:0] input_K_reg;
+reg [8:0] input_M_reg;
+reg [8:0] input_N_reg;
 reg [8:0] input_offset_reg;
 
 wire tpu_busy;
@@ -389,9 +389,9 @@ wire tpu_A_we;
 wire tpu_B_we;
 wire tpu_C_we;
 
-wire [11:0] tpu_A_addr;
-wire [11:0] tpu_B_addr;
-wire [11:0] tpu_C_addr;
+wire [13:0] tpu_A_addr;
+wire [12:0] tpu_B_addr;
+wire [12:0] tpu_C_addr;
 
 wire [31:0] tpu_A_din;
 wire [31:0] tpu_B_din;
