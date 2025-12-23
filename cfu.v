@@ -1,5 +1,7 @@
 `include "./src/RTL/TPU.v"
 `include "./src/RTL/global_buffer.v"
+`include "./src/RTL/RDBPOT.v"
+`include "./src/RTL/SRDHM.v"
 
 // make ENABLE_TRACE_ARG=--trace VERILATOR_TRACE_DEPTH=2 renode
 
@@ -20,13 +22,19 @@ module Cfu (
 // funct7 = 2: load B
 // funct7 = 3: run tpu
 // funct7 = 4: read C
+// funct7 = 5: reset C
 
+wire [2:0] funct3 = cmd_payload_function_id[2:0];
 wire [6:0] funct7 = cmd_payload_function_id[9:3];
 
-wire sel_a =    (funct7 == 7'd1);
-wire sel_b =    (funct7 == 7'd2);
-wire sel_run =  (funct7 == 7'd3);
-wire sel_c =    (funct7 == 7'd4);
+wire sel_a =     (funct7 == 7'd1) && (funct3 == 3'd0);
+wire sel_b =     (funct7 == 7'd2) && (funct3 == 3'd0);
+wire sel_run =   (funct7 == 7'd3) && (funct3 == 3'd0);
+wire sel_c =     (funct7 == 7'd4) && (funct3 == 3'd0);
+wire sel_rst_c = (funct7 == 7'd5) && (funct3 == 3'd0);
+
+wire sel_rdbpot = (funct7 == 7'd1) && (funct3 == 3'd1);
+wire sel_srdhm  = (funct7 == 7'd2) && (funct3 == 3'd1);
 
 //------------------------------------------------------------
 // CFU State Machine
@@ -37,6 +45,7 @@ localparam S_READ_WAIT   = 3'd1;
 localparam S_READ_WAIT_2 = 3'd2;
 localparam S_RUN         = 3'd3;
 localparam S_RESP        = 3'd4;
+localparam S_RST_C       = 3'd5;
 
 reg [2:0]  state_q, state_d;
 
@@ -59,6 +68,8 @@ always @(*) begin
                 state_d = S_RESP;
             else if (cmd_fire && sel_run)
                 state_d = S_RUN;
+            else if (cmd_fire && sel_rst_c)
+                state_d = S_RST_C;
         end
         S_READ_WAIT: begin
             state_d = S_READ_WAIT_2;
@@ -68,6 +79,10 @@ always @(*) begin
         end
         S_RUN: begin
             if (~tpu_busy)
+                state_d = S_RESP;
+        end
+        S_RST_C: begin
+            if (clear_done)
                 state_d = S_RESP;
         end
         S_RESP: begin
@@ -89,14 +104,14 @@ end
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        input_K_reg      <= 8'd0;
-        input_M_reg      <= 8'd0;
-        input_N_reg      <= 8'd0;
-        input_offset_reg <= 32'd0;
+        input_K_reg      <= 10'd0;
+        input_M_reg      <= 10'd0;
+        input_N_reg      <= 10'd0;
+        input_offset_reg <= 9'd0;
     end else if (cmd_fire && sel_run) begin
-        input_K_reg      <= cmd_payload_inputs_0[23:16];
-        input_M_reg      <= cmd_payload_inputs_0[15:8];
-        input_N_reg      <= cmd_payload_inputs_0[7:0];
+        input_K_reg      <= cmd_payload_inputs_0[29:20];
+        input_M_reg      <= cmd_payload_inputs_0[19:10];
+        input_N_reg      <= cmd_payload_inputs_0[9:0];
         input_offset_reg <= cmd_payload_inputs_1[8:0];
     end
 end
@@ -117,6 +132,14 @@ always @(posedge clk or posedge reset) begin
                     if (cmd_fire && (sel_a || sel_b)) begin
                         rsp_valid_q   <= 1'b1;
                         rsp_payload_q <= 32'd0;
+                    end
+                    else if (cmd_fire && sel_rdbpot) begin
+                        rsp_valid_q   <= 1'b1;
+                        rsp_payload_q <= rdbpot_out;
+                    end
+                    else if (cmd_fire && sel_srdhm) begin
+                        rsp_valid_q   <= 1'b1;
+                        rsp_payload_q <= srdhm_out;
                     end
                     else begin
                         rsp_valid_q   <= 1'b0;
@@ -151,6 +174,17 @@ always @(posedge clk or posedge reset) begin
                     end
                 end
 
+                S_RST_C: begin
+                    if (clear_done) begin
+                        rsp_valid_q <= 1'd1;
+                        rsp_payload_q <= 32'd0;
+                    end
+                    else begin
+                        rsp_valid_q <= 1'd0;
+                        rsp_payload_q <= 32'd0;
+                    end
+                end
+
                 default: begin
                     rsp_valid_q   <= 1'b0;
                     rsp_payload_q <= 32'd0;
@@ -165,7 +199,9 @@ end
 // A Buffer
 //------------------------------------------------------------
 
-wire [11:0] A_addr;
+localparam A_ADDR_BITS = 15;
+
+wire [A_ADDR_BITS - 1:0] A_addr;
 wire [31:0] A_din;
 wire [31:0] A_dout;
 wire        A_we;
@@ -173,7 +209,7 @@ wire        A_we;
 wire cpu_A_we = cmd_fire && sel_a;
 
 global_buffer_bram #(
-    .ADDR_BITS(12),
+    .ADDR_BITS(A_ADDR_BITS),
     .DATA_BITS(32)
 ) buffer_A(
     .clk(clk),
@@ -186,14 +222,16 @@ global_buffer_bram #(
 );
 
 assign A_we   = cpu_A_we ? 1'b1 : tpu_A_we;
-assign A_addr = cpu_A_we ? cmd_payload_inputs_0[11:0] : tpu_A_addr;
+assign A_addr = cpu_A_we ? cmd_payload_inputs_0[A_ADDR_BITS - 1:0] : tpu_A_addr;
 assign A_din  = cpu_A_we ? cmd_payload_inputs_1 : tpu_A_din;
 
 //------------------------------------------------------------
 // B Buffer
 //------------------------------------------------------------
 
-wire [11:0] B_addr;
+localparam B_ADDR_BITS = 14;
+
+wire [B_ADDR_BITS - 1:0] B_addr;
 wire [31:0] B_din;
 wire [31:0] B_dout;
 wire        B_we;
@@ -201,7 +239,7 @@ wire        B_we;
 wire cpu_B_we = cmd_fire && sel_b;
 
 global_buffer_bram #(
-    .ADDR_BITS(12),
+    .ADDR_BITS(B_ADDR_BITS),
     .DATA_BITS(32)
 ) buffer_B(
     .clk(clk),
@@ -214,7 +252,7 @@ global_buffer_bram #(
 );
 
 assign B_we =   cpu_B_we ? 1'b1 : tpu_B_we;
-assign B_addr = cpu_B_we ? cmd_payload_inputs_0[11:0] : tpu_B_addr;
+assign B_addr = cpu_B_we ? cmd_payload_inputs_0[B_ADDR_BITS - 1:0] : tpu_B_addr;
 assign B_din =  cpu_B_we ? cmd_payload_inputs_1 : tpu_B_din;
 
 
@@ -222,13 +260,13 @@ assign B_din =  cpu_B_we ? cmd_payload_inputs_1 : tpu_B_din;
 // C Buffer
 //------------------------------------------------------------
 
-wire [11:0]  C_addr;
+wire [12:0]  C_addr;
 wire [1:0]   C_addr_2;
 wire [127:0] C_din;
 wire [127:0] C_dout;
 wire         C_we;
 
-reg [11:0] C_addr_reg;
+reg [12:0] C_addr_reg;
 reg [1:0]  C_addr_2_reg;
 
 reg [127:0] C_read_data_q;
@@ -238,31 +276,50 @@ wire [31:0] C_word = (C_addr_2_reg == 2'd0) ? C_dout[127:96] :
                      (C_addr_2_reg == 2'd2) ? C_dout[63:32]  :
                                               C_dout[31:0];
 
-global_buffer_bram #(
-    .ADDR_BITS(12),
+localparam integer C_ADDR_BITS = 13;
+
+wire C_acc_mode;
+
+global_buffer_bram_acc #(
+    .ADDR_BITS(C_ADDR_BITS),
     .DATA_BITS(128)
 ) buffer_C(
     .clk(clk),
     .rst_n(~reset),
     .ram_en(1'b1),
     .wr_en(C_we),
+    .acc_mode(C_acc_mode),
     .index(C_addr),
     .data_in(C_din),
     .data_out(C_dout)
 );
 
-assign C_we   = cpu_C_read_active ? 1'b0        : tpu_C_we;
-assign C_addr = cpu_C_read_active ? C_addr_reg  : tpu_C_addr;
-assign C_din  = tpu_C_din;
+// global_buffer_bram #(
+//     .ADDR_BITS(12),
+//     .DATA_BITS(128)
+// ) buffer_C(
+//     .clk(clk),
+//     .rst_n(~reset),
+//     .ram_en(1'b1),
+//     .wr_en(C_we),
+//     .index(C_addr),
+//     .data_in(C_din),
+//     .data_out(C_dout)
+// );
+
+assign C_we       = c_clear_one_q ? 1'b1 : (cpu_C_read_active ? 1'b0 : tpu_C_we);
+assign C_addr     = c_clear_one_q ? c_clear_addr_q : (cpu_C_read_active ? C_addr_reg : tpu_C_addr);
+assign C_din      = c_clear_one_q ? 128'd0 : tpu_C_din;
+assign C_acc_mode = c_clear_one_q ? 1'b0 : (cpu_C_read_active ? 1'b0 : tpu_C_we);
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        C_addr_reg   <= 12'd0;
+        C_addr_reg   <= 13'd0;
         C_addr_2_reg <= 2'd0;
         C_read_data_q <= 128'd0;
     end else begin
         if (cmd_fire && sel_c && state_q == S_IDLE) begin
-            C_addr_reg   <= cmd_payload_inputs_0[11:0];
+            C_addr_reg   <= cmd_payload_inputs_0[12:0];
             C_addr_2_reg <= cmd_payload_inputs_1[1:0];
         end
 
@@ -289,6 +346,28 @@ end
 
 wire cpu_C_read_active = c_read_active_q;
 
+
+reg                   c_clear_one_q;
+reg [C_ADDR_BITS-1:0] c_clear_addr_q;
+
+wire clear_done = (state_q == S_RST_C) && c_clear_one_q;
+
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        c_clear_one_q  <= 1'b0;
+        c_clear_addr_q <= {C_ADDR_BITS{1'b0}};
+    end else begin
+        if (cmd_fire && sel_rst_c && (state_q == S_IDLE)) begin
+            c_clear_one_q  <= 1'b1;
+            c_clear_addr_q <= cmd_payload_inputs_0[12:0];
+        end
+        else if (state_q == S_RST_C) begin
+            c_clear_one_q <= 1'b0;
+            c_clear_addr_q <= {C_ADDR_BITS{1'b0}};
+        end
+    end
+end
+
 //------------------------------------------------------------
 // TPU
 //------------------------------------------------------------
@@ -303,9 +382,9 @@ always @(posedge clk or posedge reset) begin
 end
 wire tpu_in_valid = tpu_in_valid_q;
 
-reg [7:0] input_K_reg;
-reg [7:0] input_M_reg;
-reg [7:0] input_N_reg;
+reg [9:0] input_K_reg;
+reg [9:0] input_M_reg;
+reg [9:0] input_N_reg;
 reg [8:0] input_offset_reg;
 
 wire tpu_busy;
@@ -314,9 +393,9 @@ wire tpu_A_we;
 wire tpu_B_we;
 wire tpu_C_we;
 
-wire [11:0] tpu_A_addr;
-wire [11:0] tpu_B_addr;
-wire [11:0] tpu_C_addr;
+wire [A_ADDR_BITS - 1:0] tpu_A_addr;
+wire [B_ADDR_BITS - 1:0] tpu_B_addr;
+wire [C_ADDR_BITS - 1:0] tpu_C_addr;
 
 wire [31:0] tpu_A_din;
 wire [31:0] tpu_B_din;
@@ -351,5 +430,20 @@ TPU tpu (
     .C_data_in(tpu_C_din),
     .C_data_out(C_dout)
 );
+
+wire signed [31:0] rdbpot_out;
+RDBPOT m_rdbpot (
+    .in_x(cmd_payload_inputs_0),
+    .exp(cmd_payload_inputs_1[4:0]),
+    .out_x(rdbpot_out)
+);
+
+wire signed [31:0] srdhm_out;
+SRDHM m_srdhm (
+    .a(cmd_payload_inputs_0),
+    .b(cmd_payload_inputs_1),
+    .out_x(srdhm_out)
+);
+
 
 endmodule
