@@ -22,29 +22,16 @@ limitations under the License.
 #include "playground_util/print_params.h"
 
 #include "cfu.h"
-#include "perf.h"
 
 
 namespace tflite {
 namespace reference_integer_ops {
 
-// Copyright (c) 2023-2024 Chung-Yi Chen (Yeecy)
-// Faster Implementation of RDBPOT and SRDHM
 inline int32_t RDBPOT(const int32_t x, const int32_t exp) {
-  // const int32_t mask = (1 << exp) - 1;
-  // const int32_t remainder = x & mask;
-  // const int32_t threshold = (mask >> 1) + ((x >> 31) & 1);
-  // return (x >> exp) + (remainder > threshold);
   return cfu_op1(1, static_cast<uint32_t>(x), static_cast<uint32_t>(exp));
 }
 
 inline int32_t SRDHM(const int32_t a, const int32_t b) {
-  // const bool overflow = (a == INT32_MIN) && (b == INT32_MIN);
-  // const int64_t ab_64 = (int64_t)a * (int64_t)b;
-  // const int32_t nudge = ((ab_64 >> 63) & 1) ? 0xc0000001 : 0x40000000;
-  // const int64_t ab_64_nudge = ab_64 + nudge;
-  // return overflow ? 0x7fffffff :
-  //   (ab_64_nudge >> 63) & 1 ? -(-ab_64_nudge >> 31) : ab_64_nudge >> 31;
   return cfu_op1(2, static_cast<uint32_t>(a), static_cast<uint32_t>(b));
 }
 
@@ -61,13 +48,12 @@ inline int32_t myMultiplyByQuantizedMultiplier(int32_t x,
 
 inline int8_t myRequant(
   int32_t acc, const int32_t output_multiplier, 
-  const int32_t output_shift, const int32_t output_offset, 
-  const int32_t output_activation_min, const int32_t output_activation_max) {
+  const int32_t output_shift, const int32_t output_offset) {
   
   acc = myMultiplyByQuantizedMultiplier(acc, output_multiplier, output_shift);
   acc += output_offset;
-  acc = std::max(acc, output_activation_min);
-  acc = std::min(acc, output_activation_max);
+  acc = std::max(acc, -128l);
+  acc = std::min(acc, 127l);
   return static_cast<int8_t>(acc);
 }
 
@@ -79,95 +65,29 @@ inline void ConvPerChannel(
     const int8_t* filter_data, const RuntimeShape& bias_shape,
     const int32_t* bias_data, const RuntimeShape& output_shape,
     int8_t* output_data) {
-
-  // print_conv_params(params, input_shape, filter_shape, output_shape);
   
-  // perf_enable_counter(7);
   // Get parameters.
   const int32_t input_offset = params.input_offset;  // r = s(q - Z)
   const int stride_width = params.stride_width;
-  // const int stride_height = params.stride_height;
-  // const int dilation_width_factor = params.dilation_width_factor;
-  // const int dilation_height_factor = params.dilation_height_factor;
   const int pad_width = params.padding_values.width;
-  // const int pad_height = params.padding_values.height;
   const int32_t output_offset = params.output_offset;
 
-  // Set min and max value of the output.
-  // const int32_t output_activation_min = params.quantized_activation_min;
-  // const int32_t output_activation_max = params.quantized_activation_max;
-
-  // Consistency check.
-  // TFLITE_DCHECK_LE(output_activation_min, output_activation_max);
-  // TFLITE_DCHECK_EQ(input_shape.DimensionsCount(), 4);
-  // TFLITE_DCHECK_EQ(filter_shape.DimensionsCount(), 4);
-  // TFLITE_DCHECK_EQ(output_shape.DimensionsCount(), 4);
-  // const int batches = MatchingDim(input_shape, 0, output_shape, 0);
-  // const int input_depth = input_shape.Dims(3);
   const int output_depth = MatchingDim(filter_shape, 0, output_shape, 3);
-  // if (bias_data) {
-  //   TFLITE_DCHECK_EQ(bias_shape.FlatSize(), output_depth);
-  // }
 
   // Check dimensions of the tensors.
-  // const int input_height = input_shape.Dims(1);
   const int input_width = input_shape.Dims(2);
-  // const int filter_height = filter_shape.Dims(1);
   const int filter_width = filter_shape.Dims(2);
   const int filter_input_depth = filter_shape.Dims(3);
-  // const int groups = input_depth / filter_input_depth;
-  // TFLITE_DCHECK_EQ(input_depth % filter_input_depth, 0);
-  // const int filters_per_group = output_depth / groups;
-  // const int output_height = output_shape.Dims(1);
   const int output_width = output_shape.Dims(2);
-
-
-  // var declaration
-  // TFLITE_DCHECK_EQ(groups, 1);
 
   const uint32_t K = filter_width * filter_input_depth;
   const uint32_t P = output_width;
 
-  constexpr uint32_t KMax = 8192;
+  // constexpr uint32_t KMax = 8192;
   constexpr uint32_t PMax = 256;
   constexpr uint32_t KernelMax = 2048;
 
-  int8_t im2col[KMax][PMax];
-  int8_t kernel[KMax][KernelMax];
   static int32_t result_arr[PMax][KernelMax];
-
-  // im2col
-  perf_enable_counter(0);
-  for (int out_x = 0; out_x < output_width; ++out_x) {
-    int k_idx = 0;
-    for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
-      const int in_x = (out_x * stride_width) - pad_width + filter_x;
-      for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
-        int32_t val = -input_offset;
-        if (in_x >= 0 && in_x < input_width) {
-          val = static_cast<int32_t>(input_data[in_x * filter_input_depth + in_channel]);
-        }
-        im2col[k_idx][out_x] = static_cast<int8_t>(val);
-        ++k_idx;
-      }
-    }
-  }
-  perf_disable_counter(0);
-
- 
-  // kernel
-  perf_enable_counter(1);
-  for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-    int k_idx = 0;
-    for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
-      for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
-        kernel[k_idx][out_channel] = filter_data[out_channel * (filter_width * filter_input_depth) + filter_x * filter_input_depth + in_channel];
-        ++k_idx;
-      }
-    }
-  }
-  perf_disable_counter(1);
-
 
   // GEMM
   // for (uint32_t p = 0; p < P; ++p){
@@ -192,74 +112,106 @@ inline void ConvPerChannel(
   const uint32_t Tn = 128;
   const int8_t neg_8_input_offset = static_cast<int8_t>(-input_offset);
 
-  static uint32_t A_pack[(256 / 4) * 512];
-  static uint32_t B_pack[(128 / 4) * 512];
-
   const uint32_t M_tile = M;
+  const uint32_t row4_cnt = (M_tile + 3) >> 2;
+
+  static uint32_t A_pack[8192 / 512][(256 / 4) * 512];
+
+  const int32_t in_w = input_width;
+  const int32_t in_d = filter_input_depth;
+
+  for (uint32_t k0 = 0, kid = 0; k0 < K; k0 += Tk, ++kid) {
+    const uint32_t K_tile = std::min(Tk, K - k0);
+
+    for (uint32_t kk = 0; kk < K_tile; ++kk) {
+      const uint32_t k = k0 + kk;
+
+      const uint32_t filter_x   = k / static_cast<uint32_t>(in_d);
+      const uint32_t in_channel = k - filter_x * static_cast<uint32_t>(in_d);
+
+      int16_t inx_table[256];
+      for (uint32_t out_x = 0; out_x < M_tile; ++out_x) {
+        inx_table[out_x] = static_cast<int16_t>(
+            static_cast<int32_t>(out_x) * stride_width - pad_width + static_cast<int32_t>(filter_x));
+      }
+
+      for (uint32_t r4 = 0; r4 < row4_cnt; ++r4) {
+        const uint32_t m = r4 << 2;
+
+        auto load_a = [&](uint32_t out_x) -> uint8_t {
+          if (out_x >= M_tile) return static_cast<uint8_t>(neg_8_input_offset);
+          const int32_t in_x = static_cast<int32_t>(inx_table[out_x]);
+          if (in_x < 0 || in_x >= in_w) return static_cast<uint8_t>(neg_8_input_offset);
+          return static_cast<uint8_t>(input_data[in_x * in_d + static_cast<int32_t>(in_channel)]);
+        };
+
+        const uint32_t packed =
+            (uint32_t(load_a(m + 0)) << 24) |
+            (uint32_t(load_a(m + 1)) << 16) |
+            (uint32_t(load_a(m + 2)) <<  8) |
+            (uint32_t(load_a(m + 3)));
+
+        A_pack[kid][r4 * K_tile + kk] = packed;
+      }
+    }
+  }
+
   for (uint32_t n0 = 0; n0 < N; n0 += Tn) {
     const uint32_t N_tile = std::min(Tn, N - n0);
 
     for (uint32_t i = 0; i < 8192; ++i)
       cfu_op0(5, i, 0);
 
-    const uint32_t row4_cnt = (M_tile + 3) >> 2;
-    const uint32_t n4_cnt   = (N_tile + 3) >> 2;
+    const uint32_t n4_cnt = (N_tile + 3) >> 2;
 
-    for (uint32_t k0 = 0; k0 < K; k0 += Tk) {
+    for (uint32_t k0 = 0, kid = 0; k0 < K; k0 += Tk, ++kid) {
       const uint32_t K_tile = std::min(Tk, K - k0);
-      perf_enable_counter(2);
-      for (uint32_t kk = 0; kk < K_tile; ++kk) {
-        const uint32_t k = k0 + kk;
-        for (uint32_t r4 = 0; r4 < row4_cnt; ++r4) {
-          const uint32_t m = r4 << 2;
-
-          const int8_t a0 = (m + 0 < M_tile) ? im2col[k][m + 0] : neg_8_input_offset;
-          const int8_t a1 = (m + 1 < M_tile) ? im2col[k][m + 1] : neg_8_input_offset;
-          const int8_t a2 = (m + 2 < M_tile) ? im2col[k][m + 2] : neg_8_input_offset;
-          const int8_t a3 = (m + 3 < M_tile) ? im2col[k][m + 3] : neg_8_input_offset;
-
-          A_pack[r4 * K_tile + kk] =
-              (uint32_t(uint8_t(a0)) << 24) |
-              (uint32_t(uint8_t(a1)) << 16) |
-              (uint32_t(uint8_t(a2)) <<  8) |
-              (uint32_t(uint8_t(a3))      );
-        }
-      }
       const uint32_t A_words = row4_cnt * K_tile;
       for (uint32_t addr = 0; addr < A_words; ++addr) {
-        cfu_op0(1, addr, A_pack[addr]);
+        cfu_op0(1, addr, A_pack[kid][addr]);
       }
-      perf_disable_counter(2);
 
-      perf_enable_counter(3);
-      for (uint32_t kk = 0; kk < K_tile; ++kk) {
-        const uint32_t k = k0 + kk;
-        for (uint32_t n4 = 0; n4 < n4_cnt; ++n4) {
-          const uint32_t n = n0 + (n4 << 2);
+      uint32_t addr = 0;
 
-          const int8_t b0 = (n + 0 < n0 + N_tile) ? kernel[k][n + 0] : 0;
-          const int8_t b1 = (n + 1 < n0 + N_tile) ? kernel[k][n + 1] : 0;
-          const int8_t b2 = (n + 2 < n0 + N_tile) ? kernel[k][n + 2] : 0;
-          const int8_t b3 = (n + 3 < n0 + N_tile) ? kernel[k][n + 3] : 0;
+      for (uint32_t n4 = 0; n4 < n4_cnt; ++n4) {
+        const uint32_t n_base = n0 + (n4 << 2);
 
-          B_pack[n4 * K_tile + kk] =
-              (uint32_t(uint8_t(b0)) << 24) |
-              (uint32_t(uint8_t(b1)) << 16) |
-              (uint32_t(uint8_t(b2)) <<  8) |
-              (uint32_t(uint8_t(b3))      );
+        for (uint32_t kk = 0; kk < K_tile; ++kk) {
+          const uint32_t k = k0 + kk;
+
+          const uint32_t filter_x   = k / static_cast<uint32_t>(filter_input_depth);
+          const uint32_t in_channel = k - filter_x * static_cast<uint32_t>(filter_input_depth);
+
+          auto get_w = [&](uint32_t oc) -> uint8_t {
+            if (oc >= static_cast<uint32_t>(output_depth)) return 0;
+            if (oc >= n0 + N_tile) return 0;
+
+            const uint32_t K_full = static_cast<uint32_t>(filter_width * filter_input_depth);
+            const uint32_t idx = oc * K_full + filter_x * static_cast<uint32_t>(filter_input_depth) + in_channel;
+            return static_cast<uint8_t>(filter_data[idx]);
+          };
+
+          const uint8_t b0 = get_w(n_base + 0);
+          const uint8_t b1 = get_w(n_base + 1);
+          const uint8_t b2 = get_w(n_base + 2);
+          const uint8_t b3 = get_w(n_base + 3);
+
+          const uint32_t packed =
+              (uint32_t(b0) << 24) |
+              (uint32_t(b1) << 16) |
+              (uint32_t(b2) <<  8) |
+              (uint32_t(b3)      );
+
+          cfu_op0(2, addr++, packed);
         }
       }
-      const uint32_t B_words = n4_cnt * K_tile;
-      for (uint32_t addr = 0; addr < B_words; ++addr) {
-        cfu_op0(2, addr, B_pack[addr]);
-      }
-      perf_disable_counter(3);
+
+
       const uint32_t dim = (static_cast<uint32_t>(K_tile) << 20) |
                             (static_cast<uint32_t>(M_tile) << 10)  |
                             static_cast<uint32_t>(N_tile);
       cfu_op0(3, dim, static_cast<uint32_t>(input_offset));
     }
-    perf_enable_counter(4);
     uint32_t C_row_cnt = 0;
     for (uint32_t jj = 0; jj < N_tile; jj += 4) {
       for (uint32_t ii = 0; ii < M_tile; ++ii) {
@@ -273,7 +225,6 @@ inline void ConvPerChannel(
         ++C_row_cnt;
       }
     }
-    perf_disable_counter(4);
   }
 
   if (bias_data){
@@ -287,26 +238,9 @@ inline void ConvPerChannel(
   // result to output tensor
   for (int out_x = 0; out_x < output_width; ++out_x) {
     for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-      int32_t acc = result_arr[out_x][out_channel];
-      acc = MultiplyByQuantizedMultiplier(
-        acc, output_multiplier[out_channel], output_shift[out_channel]);
-      acc += output_offset;
-      acc = std::max(acc, -128l);
-      acc = std::min(acc, 127l);
-      // int32_t my_acc = myRequant(acc, output_multiplier[out_channel],
-      //               output_shift[out_channel], output_offset, 
-      //               output_activation_min, output_activation_max);
-      // if (acc != my_acc) {
-      //   printf("(acc, my_acc) = (%ld, %ld) (multiplier, shift, offset) = (%ld, %ld, %ld)\n", acc, my_acc, output_multiplier[out_channel], output_shift[out_channel], output_offset);
-      // }
-      // ((i0 * dims_data[1] + i1) * dims_data[2] + i2) * dims_data[3] + i3
-      // output_data[Offset(output_shape, 0, 0, out_x, out_channel)] = acc;
-      output_data[out_x * output_depth + out_channel] = acc;
-
-      // output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
-      //     myRequant(acc, output_multiplier[out_channel],
-      //               output_shift[out_channel], output_offset, 
-      //               output_activation_min, output_activation_max);
+      output_data[out_x * output_depth + out_channel] =
+          myRequant(result_arr[out_x][out_channel], output_multiplier[out_channel],
+                    output_shift[out_channel], output_offset);
     }
   }
 
@@ -430,26 +364,3 @@ inline void ConvPerChannel(
 }  // namespace tflite
 
 #endif  // TENSORFLOW_LITE_KERNELS_INTERNAL_REFERENCE_INTEGER_OPS_CONV_H_
-//  Counter |  Total | Starts | Average |     Raw
-// ---------+--------+--------+---------+--------------
-//     0    |    32M |    11  |  2892k  |     31815951
-//     1    |  1072M |    11  |    97M  |   1072242876
-//     2    |  2935M |   388  |  7564k  |   2934781365
-//     3    |   442M |   388  |  1139k  |    441947225
-//     4    |   118M |    49  |  2409k  |    118065302
-//     5    |     0  |     0  |   n/a   |            0
-//     6    |     0  |     0  |   n/a   |            0
-//     7    |     0  |     0  |   n/a   |            0
-//   4770M (   4770383466 )  cycles total
-
-//  Counter |  Total | Starts | Average |     Raw
-// ---------+--------+--------+---------+--------------
-//     0    |   152M |    11  |    14M  |    151670636
-//     1    |  1072M |    11  |    97M  |   1072226676
-//     2    |  1634M |   388  |  4212k  |   1634180500
-//     3    |   442M |   388  |  1139k  |    441946608
-//     4    |   118M |    49  |  2410k  |    118071438
-//     5    |     0  |     0  |   n/a   |            0
-//     6    |     0  |     0  |   n/a   |            0
-//     7    |     0  |     0  |   n/a   |            0
-  // 3590M (   3589580103 )  cycles total

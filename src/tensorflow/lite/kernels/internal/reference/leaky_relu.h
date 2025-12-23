@@ -19,7 +19,6 @@ limitations under the License.
 #include <limits>
 
 #include "tensorflow/lite/kernels/internal/common.h"
-#include "perf.h"
 
 namespace tflite {
 namespace reference_ops {
