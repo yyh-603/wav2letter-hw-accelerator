@@ -134,10 +134,7 @@ inline void ConvPerChannel(
 
   int8_t im2col[KMax][PMax];
   int8_t kernel[KMax][KernelMax];
-  int32_t result_arr[PMax][KernelMax];
-
-  // int8_t im2col[n0][k0][Tk][Tm];
-  // int8_t kernel[n0][k0][Tk][Tn];
+  static int32_t result_arr[PMax][KernelMax];
 
   // im2col
   perf_enable_counter(0);
@@ -191,73 +188,71 @@ inline void ConvPerChannel(
   // CFU GEMM (M * K @ K * N)
   const uint32_t M = P;
   const uint32_t N = output_depth;
-  // constexpr uint32_t T = 64;
-
-  for (uint32_t i = 0; i < M; ++i) {
-    for (uint32_t j = 0; j < N; ++j)
-      result_arr[i][j] = 0;
-  }
-
-  // printf("(M, K, N) = (%ld, %ld, %ld)\n", M, K, N);
 
   const uint32_t Tk = 512;
   const uint32_t Tn = 128;
   const int8_t neg_8_input_offset = static_cast<int8_t>(-input_offset);
 
+  static uint32_t A_pack[(256 / 4) * 512];
+  static uint32_t B_pack[(128 / 4) * 512];
+
   const uint32_t M_tile = M;
   for (uint32_t n0 = 0; n0 < N; n0 += Tn) {
     const uint32_t N_tile = std::min(Tn, N - n0);
+
     for (uint32_t i = 0; i < 8192; ++i)
       cfu_op0(5, i, 0);
+
+    const uint32_t row4_cnt = (M_tile + 3) >> 2;
+    const uint32_t n4_cnt   = (N_tile + 3) >> 2;
+
     for (uint32_t k0 = 0; k0 < K; k0 += Tk) {
       const uint32_t K_tile = std::min(Tk, K - k0);
-      int A_row_cnt = 0;
       perf_enable_counter(2);
-      for (uint32_t ii = 0; ii < M_tile; ii += 4) {
-        for (uint32_t jj = 0; jj < K_tile; ++jj) {
-          const uint32_t i = ii;
-          const uint32_t j = k0 + jj;
+      for (uint32_t kk = 0; kk < K_tile; ++kk) {
+        const uint32_t k = k0 + kk;
+        for (uint32_t r4 = 0; r4 < row4_cnt; ++r4) {
+          const uint32_t m = r4 << 2;
 
-          const int8_t a0 = im2col[j][i + 0];
-          const int8_t a1 = (ii + 1 < M_tile) ? im2col[j][i + 1] : neg_8_input_offset;
-          const int8_t a2 = (ii + 2 < M_tile) ? im2col[j][i + 2] : neg_8_input_offset;
-          const int8_t a3 = (ii + 3 < M_tile) ? im2col[j][i + 3] : neg_8_input_offset;
+          const int8_t a0 = (m + 0 < M_tile) ? im2col[k][m + 0] : neg_8_input_offset;
+          const int8_t a1 = (m + 1 < M_tile) ? im2col[k][m + 1] : neg_8_input_offset;
+          const int8_t a2 = (m + 2 < M_tile) ? im2col[k][m + 2] : neg_8_input_offset;
+          const int8_t a3 = (m + 3 < M_tile) ? im2col[k][m + 3] : neg_8_input_offset;
 
-          const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(a0)) << 24);
-          const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(a1)) << 16);
-          const uint32_t data2 = (static_cast<uint32_t>(static_cast<uint8_t>(a2)) <<  8);
-          const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(a3)));
-
-          const uint32_t data = data0 | data1 | data2 | data3;
-          // perf_enable_counter(1);
-          cfu_op0(1, A_row_cnt, data);
-          // perf_disable_counter(1);
-          ++A_row_cnt;
+          A_pack[r4 * K_tile + kk] =
+              (uint32_t(uint8_t(a0)) << 24) |
+              (uint32_t(uint8_t(a1)) << 16) |
+              (uint32_t(uint8_t(a2)) <<  8) |
+              (uint32_t(uint8_t(a3))      );
         }
+      }
+      const uint32_t A_words = row4_cnt * K_tile;
+      for (uint32_t addr = 0; addr < A_words; ++addr) {
+        cfu_op0(1, addr, A_pack[addr]);
       }
       perf_disable_counter(2);
 
       perf_enable_counter(3);
-      int B_row_cnt = 0;
-      for (uint32_t jj = 0; jj < N_tile; jj += 4) {
-        for (uint32_t ii = 0; ii < K_tile; ++ii) {
-          const uint32_t i = k0 + ii;
-          const uint32_t j = n0 + jj;
+      for (uint32_t kk = 0; kk < K_tile; ++kk) {
+        const uint32_t k = k0 + kk;
+        for (uint32_t n4 = 0; n4 < n4_cnt; ++n4) {
+          const uint32_t n = n0 + (n4 << 2);
 
-          const int8_t b0 = kernel[i][j];
-          const int8_t b1 = (jj + 1 < N_tile) ? kernel[i][j + 1] : 0;
-          const int8_t b2 = (jj + 2 < N_tile) ? kernel[i][j + 2] : 0;
-          const int8_t b3 = (jj + 3 < N_tile) ? kernel[i][j + 3] : 0;
+          const int8_t b0 = (n + 0 < n0 + N_tile) ? kernel[k][n + 0] : 0;
+          const int8_t b1 = (n + 1 < n0 + N_tile) ? kernel[k][n + 1] : 0;
+          const int8_t b2 = (n + 2 < n0 + N_tile) ? kernel[k][n + 2] : 0;
+          const int8_t b3 = (n + 3 < n0 + N_tile) ? kernel[k][n + 3] : 0;
 
-          const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(b0)) << 24);
-          const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(b1)) << 16);
-          const uint32_t data2 = (static_cast<uint32_t>(static_cast<uint8_t>(b2)) <<  8);
-          const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(b3)));
-
-          const uint32_t data = data0 | data1 | data2 | data3;
-          cfu_op0(2, B_row_cnt, data);
-          ++B_row_cnt;
+          B_pack[n4 * K_tile + kk] =
+              (uint32_t(uint8_t(b0)) << 24) |
+              (uint32_t(uint8_t(b1)) << 16) |
+              (uint32_t(uint8_t(b2)) <<  8) |
+              (uint32_t(uint8_t(b3))      );
         }
+      }
+      const uint32_t B_words = n4_cnt * K_tile;
+      for (uint32_t addr = 0; addr < B_words; ++addr) {
+        cfu_op0(2, addr, B_pack[addr]);
       }
       perf_disable_counter(3);
       const uint32_t dim = (static_cast<uint32_t>(K_tile) << 20) |
@@ -273,15 +268,9 @@ inline void ConvPerChannel(
         const uint32_t j = n0 + jj;
 
         result_arr[i][j] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 0));
-        if (jj + 1 < N_tile) {
-          result_arr[i][j + 1] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 1));
-        }
-        if (jj + 2 < N_tile) {
-          result_arr[i][j + 2] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 2)); 
-        }
-        if (jj + 3 < N_tile) {
-          result_arr[i][j + 3] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 3));
-        }
+        if (jj + 1 < N_tile) result_arr[i][j + 1] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 1));
+        if (jj + 2 < N_tile) result_arr[i][j + 2] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 2)); 
+        if (jj + 3 < N_tile) result_arr[i][j + 3] = static_cast<int32_t>(cfu_op0(4, C_row_cnt, 3));
         ++C_row_cnt;
       }
     }
