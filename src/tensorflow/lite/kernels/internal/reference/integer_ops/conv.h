@@ -19,6 +19,7 @@ limitations under the License.
 
 #include "tensorflow/lite/kernels/internal/common.h"
 #include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
+#include "playground_util/print_params.h"
 
 #include "cfu.h"
 #include "perf.h"
@@ -78,96 +79,98 @@ inline void ConvPerChannel(
     const int8_t* filter_data, const RuntimeShape& bias_shape,
     const int32_t* bias_data, const RuntimeShape& output_shape,
     int8_t* output_data) {
+
+  // print_conv_params(params, input_shape, filter_shape, output_shape);
   
-  perf_enable_counter(7);
+  // perf_enable_counter(7);
   // Get parameters.
   const int32_t input_offset = params.input_offset;  // r = s(q - Z)
   const int stride_width = params.stride_width;
-  const int stride_height = params.stride_height;
-  const int dilation_width_factor = params.dilation_width_factor;
-  const int dilation_height_factor = params.dilation_height_factor;
+  // const int stride_height = params.stride_height;
+  // const int dilation_width_factor = params.dilation_width_factor;
+  // const int dilation_height_factor = params.dilation_height_factor;
   const int pad_width = params.padding_values.width;
-  const int pad_height = params.padding_values.height;
+  // const int pad_height = params.padding_values.height;
   const int32_t output_offset = params.output_offset;
 
   // Set min and max value of the output.
-  const int32_t output_activation_min = params.quantized_activation_min;
-  const int32_t output_activation_max = params.quantized_activation_max;
+  // const int32_t output_activation_min = params.quantized_activation_min;
+  // const int32_t output_activation_max = params.quantized_activation_max;
 
   // Consistency check.
-  TFLITE_DCHECK_LE(output_activation_min, output_activation_max);
-  TFLITE_DCHECK_EQ(input_shape.DimensionsCount(), 4);
-  TFLITE_DCHECK_EQ(filter_shape.DimensionsCount(), 4);
-  TFLITE_DCHECK_EQ(output_shape.DimensionsCount(), 4);
+  // TFLITE_DCHECK_LE(output_activation_min, output_activation_max);
+  // TFLITE_DCHECK_EQ(input_shape.DimensionsCount(), 4);
+  // TFLITE_DCHECK_EQ(filter_shape.DimensionsCount(), 4);
+  // TFLITE_DCHECK_EQ(output_shape.DimensionsCount(), 4);
   // const int batches = MatchingDim(input_shape, 0, output_shape, 0);
-  const int input_depth = input_shape.Dims(3);
+  // const int input_depth = input_shape.Dims(3);
   const int output_depth = MatchingDim(filter_shape, 0, output_shape, 3);
-  if (bias_data) {
-    TFLITE_DCHECK_EQ(bias_shape.FlatSize(), output_depth);
-  }
+  // if (bias_data) {
+  //   TFLITE_DCHECK_EQ(bias_shape.FlatSize(), output_depth);
+  // }
 
   // Check dimensions of the tensors.
-  const int input_height = input_shape.Dims(1);
+  // const int input_height = input_shape.Dims(1);
   const int input_width = input_shape.Dims(2);
-  const int filter_height = filter_shape.Dims(1);
+  // const int filter_height = filter_shape.Dims(1);
   const int filter_width = filter_shape.Dims(2);
   const int filter_input_depth = filter_shape.Dims(3);
-  const int groups = input_depth / filter_input_depth;
-  TFLITE_DCHECK_EQ(input_depth % filter_input_depth, 0);
+  // const int groups = input_depth / filter_input_depth;
+  // TFLITE_DCHECK_EQ(input_depth % filter_input_depth, 0);
   // const int filters_per_group = output_depth / groups;
-  const int output_height = output_shape.Dims(1);
+  // const int output_height = output_shape.Dims(1);
   const int output_width = output_shape.Dims(2);
 
 
   // var declaration
-  TFLITE_DCHECK_EQ(groups, 1);
+  // TFLITE_DCHECK_EQ(groups, 1);
 
-  const uint32_t K = filter_height * filter_width * filter_input_depth;
-  const uint32_t P = output_height * output_width;
+  const uint32_t K = filter_width * filter_input_depth;
+  const uint32_t P = output_width;
 
   constexpr uint32_t KMax = 8192;
   constexpr uint32_t PMax = 256;
   constexpr uint32_t KernelMax = 2048;
 
-  int8_t im2col[PMax][KMax];
+  int8_t im2col[KMax][PMax];
   int8_t kernel[KMax][KernelMax];
   int32_t result_arr[PMax][KernelMax];
 
+  // int8_t im2col[n0][k0][Tk][Tm];
+  // int8_t kernel[n0][k0][Tk][Tn];
+
   // im2col
-  for (int out_y = 0; out_y < output_height; ++out_y){
-    for (int out_x = 0; out_x < output_width; ++out_x) {
-      const int p = out_y * output_width + out_x;
-      int k_idx = 0;
-      for (int filter_y = 0; filter_y < filter_height; ++filter_y) {
-        const int in_y = (out_y * stride_height) - pad_height + dilation_height_factor * filter_y;
-        for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
-          const int in_x = (out_x * stride_width) - pad_width + dilation_width_factor * filter_x;
-          for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
-            int32_t val = -input_offset;
-            if (in_y >= 0 && in_y < input_height && in_x >= 0 && in_x < input_width) {
-              val = static_cast<int32_t>(input_data[Offset(input_shape, 0, in_y, in_x, in_channel)]);
-            }
-            im2col[p][k_idx] = static_cast<int8_t>(val);
-            ++k_idx;
-          }
+  perf_enable_counter(0);
+  for (int out_x = 0; out_x < output_width; ++out_x) {
+    int k_idx = 0;
+    for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
+      const int in_x = (out_x * stride_width) - pad_width + filter_x;
+      for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
+        int32_t val = -input_offset;
+        if (in_x >= 0 && in_x < input_width) {
+          val = static_cast<int32_t>(input_data[Offset(input_shape, 0, 0, in_x, in_channel)]);
         }
+        im2col[k_idx][out_x] = static_cast<int8_t>(val);
+        ++k_idx;
       }
     }
   }
+  perf_disable_counter(0);
+
  
   // kernel
+  perf_enable_counter(1);
   for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
     int k_idx = 0;
-    for (int filter_y = 0; filter_y < filter_height; ++filter_y) {
-      for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
-        for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
-          kernel[k_idx][out_channel] = filter_data[Offset(
-                    filter_shape, out_channel, filter_y, filter_x, in_channel)];
-          ++k_idx;
-        }
+    for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
+      for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
+        kernel[k_idx][out_channel] = filter_data[Offset(
+                  filter_shape, out_channel, 0, filter_x, in_channel)];
+        ++k_idx;
       }
     }
   }
+  perf_disable_counter(1);
 
 
   // GEMM
@@ -197,8 +200,9 @@ inline void ConvPerChannel(
 
   // printf("(M, K, N) = (%ld, %ld, %ld)\n", M, K, N);
 
-  const uint32_t Tk = 256;
+  const uint32_t Tk = 512;
   const uint32_t Tn = 128;
+  const int8_t neg_8_input_offset = static_cast<int8_t>(-input_offset);
 
   const uint32_t M_tile = M;
   for (uint32_t n0 = 0; n0 < N; n0 += Tn) {
@@ -208,16 +212,16 @@ inline void ConvPerChannel(
     for (uint32_t k0 = 0; k0 < K; k0 += Tk) {
       const uint32_t K_tile = std::min(Tk, K - k0);
       int A_row_cnt = 0;
-
+      perf_enable_counter(2);
       for (uint32_t ii = 0; ii < M_tile; ii += 4) {
         for (uint32_t jj = 0; jj < K_tile; ++jj) {
           const uint32_t i = ii;
           const uint32_t j = k0 + jj;
 
-          const int8_t a0 = im2col[i + 0][j];
-          const int8_t a1 = (ii + 1 < M_tile) ? im2col[i + 1][j] : static_cast<int8_t>(-input_offset);
-          const int8_t a2 = (ii + 2 < M_tile) ? im2col[i + 2][j] : static_cast<int8_t>(-input_offset);
-          const int8_t a3 = (ii + 3 < M_tile) ? im2col[i + 3][j] : static_cast<int8_t>(-input_offset);
+          const int8_t a0 = im2col[j][i + 0];
+          const int8_t a1 = (ii + 1 < M_tile) ? im2col[j][i + 1] : neg_8_input_offset;
+          const int8_t a2 = (ii + 2 < M_tile) ? im2col[j][i + 2] : neg_8_input_offset;
+          const int8_t a3 = (ii + 3 < M_tile) ? im2col[j][i + 3] : neg_8_input_offset;
 
           const uint32_t data0 = (static_cast<uint32_t>(static_cast<uint8_t>(a0)) << 24);
           const uint32_t data1 = (static_cast<uint32_t>(static_cast<uint8_t>(a1)) << 16);
@@ -225,11 +229,15 @@ inline void ConvPerChannel(
           const uint32_t data3 = (static_cast<uint32_t>(static_cast<uint8_t>(a3)));
 
           const uint32_t data = data0 | data1 | data2 | data3;
+          // perf_enable_counter(1);
           cfu_op0(1, A_row_cnt, data);
+          // perf_disable_counter(1);
           ++A_row_cnt;
         }
       }
+      perf_disable_counter(2);
 
+      perf_enable_counter(3);
       int B_row_cnt = 0;
       for (uint32_t jj = 0; jj < N_tile; jj += 4) {
         for (uint32_t ii = 0; ii < K_tile; ++ii) {
@@ -251,13 +259,13 @@ inline void ConvPerChannel(
           ++B_row_cnt;
         }
       }
-
-      const uint32_t dim = (static_cast<uint32_t>(K_tile) << 18) |
-                            (static_cast<uint32_t>(M_tile) << 9)  |
+      perf_disable_counter(3);
+      const uint32_t dim = (static_cast<uint32_t>(K_tile) << 20) |
+                            (static_cast<uint32_t>(M_tile) << 10)  |
                             static_cast<uint32_t>(N_tile);
       cfu_op0(3, dim, static_cast<uint32_t>(input_offset));
-
     }
+    perf_enable_counter(4);
     uint32_t C_row_cnt = 0;
     for (uint32_t jj = 0; jj < N_tile; jj += 4) {
       for (uint32_t ii = 0; ii < M_tile; ++ii) {
@@ -277,7 +285,7 @@ inline void ConvPerChannel(
         ++C_row_cnt;
       }
     }
-
+    perf_disable_counter(4);
   }
 
   if (bias_data){
@@ -289,28 +297,25 @@ inline void ConvPerChannel(
   }
 
   // result to output tensor
-  for (int out_y = 0; out_y < output_height; ++out_y) {
-    for (int out_x = 0; out_x < output_width; ++out_x) {
-      const int p = out_y * output_width + out_x;
-      for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
-        int32_t acc = result_arr[p][out_channel];
-        acc = MultiplyByQuantizedMultiplier(
-          acc, output_multiplier[out_channel], output_shift[out_channel]);
-        acc += output_offset;
-        acc = std::max(acc, output_activation_min);
-        acc = std::min(acc, output_activation_max);
-        // int32_t my_acc = myRequant(acc, output_multiplier[out_channel],
-        //               output_shift[out_channel], output_offset, 
-        //               output_activation_min, output_activation_max);
-        // if (acc != my_acc) {
-        //   printf("(acc, my_acc) = (%ld, %ld) (multiplier, shift, offset) = (%ld, %ld, %ld)\n", acc, my_acc, output_multiplier[out_channel], output_shift[out_channel], output_offset);
-        // }
-        output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] = acc;
-        // output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
-        //     myRequant(acc, output_multiplier[out_channel],
-        //               output_shift[out_channel], output_offset, 
-        //               output_activation_min, output_activation_max);
-      }
+  for (int out_x = 0; out_x < output_width; ++out_x) {
+    for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
+      int32_t acc = result_arr[out_x][out_channel];
+      acc = MultiplyByQuantizedMultiplier(
+        acc, output_multiplier[out_channel], output_shift[out_channel]);
+      acc += output_offset;
+      acc = std::max(acc, -128l);
+      acc = std::min(acc, 127l);
+      // int32_t my_acc = myRequant(acc, output_multiplier[out_channel],
+      //               output_shift[out_channel], output_offset, 
+      //               output_activation_min, output_activation_max);
+      // if (acc != my_acc) {
+      //   printf("(acc, my_acc) = (%ld, %ld) (multiplier, shift, offset) = (%ld, %ld, %ld)\n", acc, my_acc, output_multiplier[out_channel], output_shift[out_channel], output_offset);
+      // }
+      output_data[Offset(output_shape, 0, 0, out_x, out_channel)] = acc;
+      // output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
+      //     myRequant(acc, output_multiplier[out_channel],
+      //               output_shift[out_channel], output_offset, 
+      //               output_activation_min, output_activation_max);
     }
   }
 
@@ -434,3 +439,26 @@ inline void ConvPerChannel(
 }  // namespace tflite
 
 #endif  // TENSORFLOW_LITE_KERNELS_INTERNAL_REFERENCE_INTEGER_OPS_CONV_H_
+//  Counter |  Total | Starts | Average |     Raw
+// ---------+--------+--------+---------+--------------
+//     0    |    32M |    11  |  2892k  |     31815951
+//     1    |  1072M |    11  |    97M  |   1072242876
+//     2    |  2935M |   388  |  7564k  |   2934781365
+//     3    |   442M |   388  |  1139k  |    441947225
+//     4    |   118M |    49  |  2409k  |    118065302
+//     5    |     0  |     0  |   n/a   |            0
+//     6    |     0  |     0  |   n/a   |            0
+//     7    |     0  |     0  |   n/a   |            0
+//   4770M (   4770383466 )  cycles total
+
+//  Counter |  Total | Starts | Average |     Raw
+// ---------+--------+--------+---------+--------------
+//     0    |   152M |    11  |    14M  |    151670636
+//     1    |  1072M |    11  |    97M  |   1072226676
+//     2    |  1634M |   388  |  4212k  |   1634180500
+//     3    |   442M |   388  |  1139k  |    441946608
+//     4    |   118M |    49  |  2410k  |    118071438
+//     5    |     0  |     0  |   n/a   |            0
+//     6    |     0  |     0  |   n/a   |            0
+//     7    |     0  |     0  |   n/a   |            0
+  // 3590M (   3589580103 )  cycles total

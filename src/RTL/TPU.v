@@ -31,9 +31,9 @@ module TPU(
 input clk;
 input rst_n;
 input            in_valid;
-input [8:0]      K;
-input [8:0]      M;
-input [8:0]      N;
+input [9:0]      K;
+input [9:0]      M;
+input [9:0]      N;
 input signed [8:0]      input_offset;
 output  reg      busy;
 
@@ -54,7 +54,7 @@ input  [127:0]   C_data_out;
 
 //* Implement your design here
 
-reg [8:0] K_reg, M_reg, N_reg;
+reg [9:0] K_reg, M_reg, N_reg;
 reg [15:0] index_r, index_c, C_shift_1, C_shift_2;
 reg [15:0] A_index_base, B_index_base, C_index_base;
 reg signed [31:0] A_buf [0:3];

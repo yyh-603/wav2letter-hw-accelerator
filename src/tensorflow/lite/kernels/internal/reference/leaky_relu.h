@@ -41,7 +41,6 @@ inline void QuantizeLeakyRelu(const LeakyReluParams& params,
                               const T* input_data,
                               const RuntimeShape& output_shape,
                               T* output_data) {
-  perf_enable_counter(7);
   const int flat_size = MatchingFlatSize(input_shape, output_shape);
   static const int32_t quantized_min = std::numeric_limits<T>::min();
   static const int32_t quantized_max = std::numeric_limits<T>::max();
@@ -62,8 +61,6 @@ inline void QuantizeLeakyRelu(const LeakyReluParams& params,
     const T clamped_output =
         std::min(quantized_max, std::max(quantized_min, unclamped_output));
     output_data[i] = static_cast<T>(clamped_output);
-    perf_disable_counter(7);
-
   }
 }
 

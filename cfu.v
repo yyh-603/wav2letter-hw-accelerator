@@ -104,14 +104,14 @@ end
 
 always @(posedge clk or posedge reset) begin
     if (reset) begin
-        input_K_reg      <= 9'd0;
-        input_M_reg      <= 9'd0;
-        input_N_reg      <= 9'd0;
+        input_K_reg      <= 10'd0;
+        input_M_reg      <= 10'd0;
+        input_N_reg      <= 10'd0;
         input_offset_reg <= 9'd0;
     end else if (cmd_fire && sel_run) begin
-        input_K_reg      <= cmd_payload_inputs_0[26:18];
-        input_M_reg      <= cmd_payload_inputs_0[17:9];
-        input_N_reg      <= cmd_payload_inputs_0[8:0];
+        input_K_reg      <= cmd_payload_inputs_0[29:20];
+        input_M_reg      <= cmd_payload_inputs_0[19:10];
+        input_N_reg      <= cmd_payload_inputs_0[9:0];
         input_offset_reg <= cmd_payload_inputs_1[8:0];
     end
 end
@@ -199,7 +199,9 @@ end
 // A Buffer
 //------------------------------------------------------------
 
-wire [13:0] A_addr;
+localparam A_ADDR_BITS = 15;
+
+wire [A_ADDR_BITS - 1:0] A_addr;
 wire [31:0] A_din;
 wire [31:0] A_dout;
 wire        A_we;
@@ -207,7 +209,7 @@ wire        A_we;
 wire cpu_A_we = cmd_fire && sel_a;
 
 global_buffer_bram #(
-    .ADDR_BITS(14),
+    .ADDR_BITS(A_ADDR_BITS),
     .DATA_BITS(32)
 ) buffer_A(
     .clk(clk),
@@ -220,14 +222,16 @@ global_buffer_bram #(
 );
 
 assign A_we   = cpu_A_we ? 1'b1 : tpu_A_we;
-assign A_addr = cpu_A_we ? cmd_payload_inputs_0[13:0] : tpu_A_addr;
+assign A_addr = cpu_A_we ? cmd_payload_inputs_0[A_ADDR_BITS - 1:0] : tpu_A_addr;
 assign A_din  = cpu_A_we ? cmd_payload_inputs_1 : tpu_A_din;
 
 //------------------------------------------------------------
 // B Buffer
 //------------------------------------------------------------
 
-wire [12:0] B_addr;
+localparam B_ADDR_BITS = 14;
+
+wire [B_ADDR_BITS - 1:0] B_addr;
 wire [31:0] B_din;
 wire [31:0] B_dout;
 wire        B_we;
@@ -235,7 +239,7 @@ wire        B_we;
 wire cpu_B_we = cmd_fire && sel_b;
 
 global_buffer_bram #(
-    .ADDR_BITS(13),
+    .ADDR_BITS(B_ADDR_BITS),
     .DATA_BITS(32)
 ) buffer_B(
     .clk(clk),
@@ -248,7 +252,7 @@ global_buffer_bram #(
 );
 
 assign B_we =   cpu_B_we ? 1'b1 : tpu_B_we;
-assign B_addr = cpu_B_we ? cmd_payload_inputs_0[12:0] : tpu_B_addr;
+assign B_addr = cpu_B_we ? cmd_payload_inputs_0[B_ADDR_BITS - 1:0] : tpu_B_addr;
 assign B_din =  cpu_B_we ? cmd_payload_inputs_1 : tpu_B_din;
 
 
@@ -378,9 +382,9 @@ always @(posedge clk or posedge reset) begin
 end
 wire tpu_in_valid = tpu_in_valid_q;
 
-reg [8:0] input_K_reg;
-reg [8:0] input_M_reg;
-reg [8:0] input_N_reg;
+reg [9:0] input_K_reg;
+reg [9:0] input_M_reg;
+reg [9:0] input_N_reg;
 reg [8:0] input_offset_reg;
 
 wire tpu_busy;
@@ -389,9 +393,9 @@ wire tpu_A_we;
 wire tpu_B_we;
 wire tpu_C_we;
 
-wire [13:0] tpu_A_addr;
-wire [12:0] tpu_B_addr;
-wire [12:0] tpu_C_addr;
+wire [A_ADDR_BITS - 1:0] tpu_A_addr;
+wire [B_ADDR_BITS - 1:0] tpu_B_addr;
+wire [C_ADDR_BITS - 1:0] tpu_C_addr;
 
 wire [31:0] tpu_A_din;
 wire [31:0] tpu_B_din;
