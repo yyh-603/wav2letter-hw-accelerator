@@ -145,7 +145,7 @@ inline void ConvPerChannel(
       for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
         int32_t val = -input_offset;
         if (in_x >= 0 && in_x < input_width) {
-          val = static_cast<int32_t>(input_data[Offset(input_shape, 0, 0, in_x, in_channel)]);
+          val = static_cast<int32_t>(input_data[in_x * filter_input_depth + in_channel]);
         }
         im2col[k_idx][out_x] = static_cast<int8_t>(val);
         ++k_idx;
@@ -161,8 +161,7 @@ inline void ConvPerChannel(
     int k_idx = 0;
     for (int filter_x = 0; filter_x < filter_width; ++filter_x) {
       for (int in_channel = 0; in_channel < filter_input_depth; ++in_channel) {
-        kernel[k_idx][out_channel] = filter_data[Offset(
-                  filter_shape, out_channel, 0, filter_x, in_channel)];
+        kernel[k_idx][out_channel] = filter_data[out_channel * (filter_width * filter_input_depth) + filter_x * filter_input_depth + in_channel];
         ++k_idx;
       }
     }
@@ -300,7 +299,10 @@ inline void ConvPerChannel(
       // if (acc != my_acc) {
       //   printf("(acc, my_acc) = (%ld, %ld) (multiplier, shift, offset) = (%ld, %ld, %ld)\n", acc, my_acc, output_multiplier[out_channel], output_shift[out_channel], output_offset);
       // }
-      output_data[Offset(output_shape, 0, 0, out_x, out_channel)] = acc;
+      // ((i0 * dims_data[1] + i1) * dims_data[2] + i2) * dims_data[3] + i3
+      // output_data[Offset(output_shape, 0, 0, out_x, out_channel)] = acc;
+      output_data[out_x * output_depth + out_channel] = acc;
+
       // output_data[Offset(output_shape, 0, out_y, out_x, out_channel)] =
       //     myRequant(acc, output_multiplier[out_channel],
       //               output_shift[out_channel], output_offset, 
