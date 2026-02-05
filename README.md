@@ -18,7 +18,7 @@ This project achieves **34.6x speedup** on the CFU implementation compared to th
 - Average Latency per inference: About 17.5 minutes -> 30.6 seconds
 - WER: 27.78% (same as original inference)
 
-![image](.docs/metric1.png)
+<img src="./docs/metric1.png" alt="image" width="50%" />
 
 ## Method
 
@@ -30,7 +30,8 @@ Therefore, we design a CFU to accelerate the Conv2D layer.
 We can use im2col operation to convert the Conv2D operation to a matrix multiplication operation. Then, we can use systolic array architecture to accelerate the matrix multiplication. In this project, we implement a 4x4 systolic array to perform the matrix multiplication.
 
 Because we have to load the input and the weight from the memory, we use 3 buffer to store the input, the weight and the output. To avoid the data transfer overhead, we use accumulation buffer (C buffer) to store the output of the systolic array and only write back to the memory when the corresponding output is ready. 
-![image](./docs/structure.png)
+<img src="./docs/structure.png" alt="image" width="50%" />
+
 
 ### Tiling Strategy
 
