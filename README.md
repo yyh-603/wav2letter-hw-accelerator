@@ -85,4 +85,6 @@ and press `3` > `w` > `g` to run the golden test.
 - reboot the board and close the litex terminal
 - run `python test.py` to run the python test script.
 
+## Course References
 
+[Guide of this project](https://nycu-caslab.github.io/AAML2025/project/final_project.html)
